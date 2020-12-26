@@ -30,7 +30,7 @@ void shuffle(std::vector<T> &vec, size_t len) {
   
 int main(int argc, char *argv[]) {
   int c;
-  uint64_t max_keys = 1UL<<27;
+  uint64_t max_keys = 1UL<<23;
   void *ptr = nullptr;
   node *nodes = nullptr;
   bool xor_pointers = false;
