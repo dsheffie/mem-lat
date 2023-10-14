@@ -5,9 +5,17 @@
 
 static const uint64_t ptr_key = 0x1234567076543210UL;
 
-struct node {
-  node *next;
-};
+#ifdef UNALIGNED_NODE
+typedef struct __attribute__ ((__packed__)) node {
+  uint8_t pad0[57];
+  struct node *next;
+  uint8_t pad1[128 - (sizeof(struct node*) + 57)];
+} node ;
+#else
+typedef struct node {
+  struct node *next;
+} node;
+#endif
 
 static const void* failed_mmap = reinterpret_cast<void *>(-1);
 

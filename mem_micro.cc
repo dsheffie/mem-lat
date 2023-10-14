@@ -30,7 +30,7 @@ void shuffle(std::vector<T> &vec, size_t len) {
   
 int main(int argc, char *argv[]) {
   int c;
-  uint64_t max_keys = 1UL<<27;
+  uint64_t max_keys = 1UL<<23;
   void *ptr = nullptr;
   node *nodes = nullptr;
   bool xor_pointers = false;
@@ -49,9 +49,7 @@ int main(int argc, char *argv[]) {
       }
   }
 
-    
-  
-  std::cout << "running with xor'd pointers = "
+  std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "
 	    << xor_pointers << "\n";
   
   ptr = mmap(nullptr, sizeof(node)*max_keys, PROT, MAP|MAP_HUGETLB, -1, 0);
@@ -74,7 +72,7 @@ int main(int argc, char *argv[]) {
   std::ofstream out("cpu.csv");
   std::vector<uint64_t> keys(max_keys);
   
-  for(uint64_t n_keys = 1UL<<8; n_keys <= max_keys; n_keys *= 2) {
+  for(uint64_t n_keys = 1UL<<1; n_keys <= max_keys; n_keys *= 2) {
     
     for(uint64_t i = 0; i < n_keys; i++) {
       keys[i] = i;
