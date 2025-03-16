@@ -33,11 +33,14 @@ int main(int argc, char *argv[]) {
   uint64_t max_keys = 1UL<<23;
   void *ptr = nullptr;
   node *nodes = nullptr;
-  bool xor_pointers = false;
+  bool xor_pointers = false, atomic = false;
 
-  while ((c = getopt (argc, argv, "m:x:")) != -1) {
+  while ((c = getopt (argc, argv, "a:m:x:")) != -1) {
     switch(c)
       {
+      case 'a':
+	atomic = (atoi(optarg) != 0);
+	break;
       case 'm':
 	max_keys = 1UL << atoi(optarg);
 	break;
@@ -107,7 +110,12 @@ int main(int argc, char *argv[]) {
       traverse<true>(h, iters);
     }
     else {
-      traverse<false>(h, iters);
+      if(atomic) {
+	atomic_traverse(h, iters, 0);
+      }
+      else {
+	traverse<false>(h, iters);
+      }
     }
     performance_counters c1 = get_counters();
     double c_stop = c1.cycles;
