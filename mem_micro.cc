@@ -9,10 +9,10 @@
 #include <fstream>
 
 #include "mem_micro.hh"
-#include "perf.hh"
+#include "m1cycles.hh"
 
 #define PROT (PROT_READ | PROT_WRITE)
-#define MAP (MAP_ANONYMOUS|MAP_PRIVATE|MAP_POPULATE)
+#define MAP (MAP_ANONYMOUS|MAP_PRIVATE)
 
 template <typename T>
 void swap(T &x, T &y) {
@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
   std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "
 	    << xor_pointers << "\n";
   
-  ptr = mmap(nullptr, sizeof(node)*max_keys, PROT, MAP|MAP_HUGETLB, -1, 0);
+  ptr = mmap(nullptr, sizeof(node)*max_keys, PROT, MAP, -1, 0);
 
   if(ptr == failed_mmap) {
     ptr = mmap(nullptr, sizeof(node)*max_keys, PROT, MAP, -1, 0);
@@ -71,8 +71,9 @@ int main(int argc, char *argv[]) {
   
   std::ofstream out("cpu.csv");
   std::vector<uint64_t> keys(max_keys);
+  setup_performance_counters();
   
-  for(uint64_t n_keys = 1UL<<1; n_keys <= max_keys; n_keys *= 2) {
+  for(uint64_t n_keys = 1; n_keys <= 16; n_keys++) {
     
     for(uint64_t i = 0; i < n_keys; i++) {
       keys[i] = i;
@@ -100,26 +101,22 @@ int main(int argc, char *argv[]) {
     if(iters < (1UL<<20)) {
       iters = (1UL<<20);
     }
-    cycle_counter cc;
-    cc.reset_counter();    
-    auto start = std::chrono::high_resolution_clock::now();
-    cc.enable_counter();
-    auto c_start = cc.read_counter();
+
+    performance_counters c0 = get_counters();
     if(xor_pointers) {
       traverse<true>(h, iters);
     }
     else {
       traverse<false>(h, iters);
     }
-    auto c_stop = cc.read_counter();    
-    auto stop = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = stop-start;
-    double t = elapsed.count() / (1e-9);
+    performance_counters c1 = get_counters();
+    double c_stop = c1.cycles;
+    double c_start = c0.cycles;
+    
     double c_t = static_cast<double>(c_stop-c_start);        
-    t /= iters;
     c_t /= iters;
-    std::cout << (n_keys*sizeof(node)) << "," << c_t <<" cycles," <<t << " ns \n";
-    out << (n_keys*sizeof(node)) << "," << c_t <<"," << t << "\n";
+    std::cout << (n_keys*sizeof(node)) << "," << c_t <<" cycles\n";
+    out << (n_keys*sizeof(node)) << "," << c_t <<"\n";
     out.flush();
   }
   out.close();

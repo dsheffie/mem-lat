@@ -1,4 +1,4 @@
-OBJ = mem_micro.o traverse.o
+OBJ = mem_micro.o traverse.o m1cycles.o
 CXX = g++
 EXE = mem_micro
 OPT = -O2
