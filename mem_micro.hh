@@ -33,4 +33,5 @@ static inline node* xor_ptr(node *ptr) {
 
 template <bool xor_ptrs> node *traverse(node *n, uint64_t iters);
 node *atomic_traverse(node *n, uint64_t iters, uint64_t amt);
+int run_loaded(uint64_t chain_nodes, int max_load_threads);
 #endif

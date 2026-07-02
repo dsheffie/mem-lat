@@ -34,8 +34,9 @@ int main(int argc, char *argv[]) {
   void *ptr = nullptr;
   node *nodes = nullptr;
   bool xor_pointers = false, atomic = false;
+  int loaded = -2; /* -2 = off; >= -1 selects loaded mode (-1 = all cpus) */
 
-  while ((c = getopt (argc, argv, "a:m:x:")) != -1) {
+  while ((c = getopt (argc, argv, "a:m:x:L:")) != -1) {
     switch(c)
       {
       case 'a':
@@ -47,9 +48,16 @@ int main(int argc, char *argv[]) {
       case 'x':
 	xor_pointers = (atoi(optarg) != 0);
 	break;
+      case 'L':
+	loaded = atoi(optarg);
+	break;
       default:
 	break;
       }
+  }
+
+  if(loaded != -2) {
+    return run_loaded(max_keys, loaded);
   }
 
   std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "

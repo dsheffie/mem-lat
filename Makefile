@@ -1,8 +1,9 @@
-OBJ = mem_micro.o traverse.o
+OBJ = mem_micro.o traverse.o loaded.o
 CXX = g++
 EXE = mem_micro
 OPT = -O2
-CXXFLAGS = -std=c++11 -g $(OPT)
+CXXFLAGS = -std=c++11 -g $(OPT) -pthread
+LIBS = -pthread
 DEP = $(OBJ:.o=.d)
 
 .PHONY: all clean
