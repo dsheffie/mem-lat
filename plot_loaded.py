@@ -24,7 +24,7 @@ pp = PdfPages(h + '.pdf')
 plt.figure()
 plt.xlabel('load bandwidth (GB/s)')
 plt.ylabel('latency (ns)')
-plt.title(h + ' loaded latency')
+plt.title(h + ' memory latency')
 plt.plot(gbps, ns, '--o', color='b')
 for t, x, y in zip(threads, gbps, ns):
     plt.annotate(str(t), (x, y), textcoords='offset points', xytext=(5, 5))
