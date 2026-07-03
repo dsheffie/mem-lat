@@ -128,6 +128,10 @@ int run_loaded(uint64_t chain_nodes, bool bind, int max_load_threads, loader_t l
     }
     else if(load == loader_t::triad) {
       bufs[i] = reinterpret_cast<uint64_t*>(alloc_mem(3*load_bytes));
+      if(bufs[i] == nullptr) {
+	std::cout << "unable to mmap load buffer\n";
+	return -1;
+      }
       for(size_t w = 0; w < (3*load_words); w++) {
 	bufs[i][w] = w + 1;
       }      
@@ -194,6 +198,9 @@ int run_loaded(uint64_t chain_nodes, bool bind, int max_load_threads, loader_t l
 	      << " ns/access, " << gbps << " GB/s load\n";
     out << k << "," << cyc << "," << ns << "," << gbps << "\n";
     out.flush();
+    if(k == max_load_threads) {
+      break;
+    }
   }
 
   out.close();
