@@ -1,8 +1,8 @@
-#include <sys/mman.h>
 #include <unistd.h>
 #include <sched.h>
 #include <pthread.h>
 #include <cstdio>
+#include <cassert>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
@@ -16,12 +16,11 @@
 #include "mem_micro.hh"
 #include "perf.hh"
 
-#define PROT (PROT_READ | PROT_WRITE)
-#define MAP (MAP_ANONYMOUS|MAP_PRIVATE|MAP_POPULATE)
-
 /* bytes each background load thread streams over, per thread.
  * must be larger than the last-level cache so every pass hits DRAM. */
-static const size_t load_bytes = 1UL<<26; /* 64 MB */
+static const size_t load_bytes = 1UL<<28; 
+
+static cpu_set_t legal_cpus;
 
 static void pin_to_cpu(int cpu) {
   cpu_set_t set;
@@ -30,49 +29,50 @@ static void pin_to_cpu(int cpu) {
   pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
 }
 
-static void *alloc_mem(size_t bytes) {
-  void *p = mmap(nullptr, bytes, PROT, MAP|MAP_HUGETLB, -1, 0);
-  if(p == failed_mmap) {
-    p = mmap(nullptr, bytes, PROT, MAP, -1, 0);
-  }
-  return (p == failed_mmap) ? nullptr : p;
-}
-
 /* streaming-read bandwidth generator: sums a private buffer over and over
  * until told to stop, counting the bytes touched during the measurement. */
 static void load_thread(int cpu,
+			loader_t load, 
 			uint64_t *buf,
 			size_t nwords,
-			std::atomic<bool> *go,
-			std::atomic<bool> *stop,
-			std::atomic<uint64_t> *bytes) {
-  pin_to_cpu(cpu);
+			std::atomic<bool> &go,
+			std::atomic<bool> &stop,
+			std::atomic<uint64_t> & bytes) {
+  if(cpu >= 0) {
+    pin_to_cpu(cpu);
+  }
+  else {
+    pthread_setaffinity_np(pthread_self(), sizeof(legal_cpus), &legal_cpus);
+  }
   uint64_t sink = 0, local = 0;
-  while(!go->load(std::memory_order_acquire)) { }
-  while(!stop->load(std::memory_order_acquire)) {
-    uint64_t s = 0;
-    for(size_t i = 0; i < nwords; i++) {
-      s += buf[i];
+  
+  while(not(go.load(std::memory_order_acquire))) { }
+ 
+  while(not(stop.load(std::memory_order_acquire))) {
+    if(load == loader_t::read) {
+      uint64_t s = 0;
+      
+      for(size_t i = 0; i < nwords; i++) {
+	s += buf[i];
+      }
+      
+      sink += s;
+      local += nwords * sizeof(uint64_t);
+      /* keep the summation live so -O2 cannot delete the reads */
+      if(sink == 0xdeadbeefUL) {
+	std::cerr << "";
+      }      
     }
-    sink += s;
-    local += nwords * sizeof(uint64_t);
-  }
-  bytes->fetch_add(local, std::memory_order_relaxed);
-  /* keep the summation live so -O2 cannot delete the reads */
-  if(sink == 0xdeadbeefUL) {
-    std::cerr << "";
-  }
-}
+    else if(load == loader_t::triad) {
+      uint64_t *A = buf, *B = buf + nwords, *C = buf + 2*nwords;
 
-template <typename T>
-static void swap_v(T &x, T &y) { T t = x; x = y; y = t; }
-
-template <typename T>
-static void shuffle(std::vector<T> &vec, size_t len) {
-  for(size_t i = 0; i < len; i++) {
-    size_t j = i + (rand() % (len - i));
-    swap_v(vec[i], vec[j]);
+      for(size_t i = 0; i < nwords; i++) {
+	C[i] = B[i] + 3 * A[i];
+      }
+      local += 3 * nwords * sizeof(uint64_t);
+    }
   }
+  bytes.fetch_add(local, std::memory_order_relaxed);
 }
 
 /* build a randomized pointer-chase ring over n_keys nodes, return the head */
@@ -95,14 +95,15 @@ static node *build_ring(node *nodes, uint64_t n_keys) {
   return h;
 }
 
-int run_loaded(uint64_t chain_nodes, int max_load_threads) {
+int run_loaded(uint64_t chain_nodes, bool bind, int max_load_threads, loader_t load, int step, uint64_t iter_max) {
   int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
   /* latency thread owns cpu 0, load thread j owns cpu j+1 */
   int cap = ncpus - 1;
   if(max_load_threads < 0 || max_load_threads > cap) {
     max_load_threads = cap;
   }
-
+  sched_getaffinity(0, sizeof(legal_cpus), &legal_cpus);
+  
   void *chain_mem = alloc_mem(sizeof(node) * chain_nodes);
   if(chain_mem == nullptr) {
     std::cout << "unable to mmap chain memory\n";
@@ -115,13 +116,24 @@ int run_loaded(uint64_t chain_nodes, int max_load_threads) {
   size_t load_words = load_bytes / sizeof(uint64_t);
   std::vector<uint64_t*> bufs(max_load_threads, nullptr);
   for(int i = 0; i < max_load_threads; i++) {
-    bufs[i] = reinterpret_cast<uint64_t*>(alloc_mem(load_bytes));
-    if(bufs[i] == nullptr) {
-      std::cout << "unable to mmap load buffer\n";
-      return -1;
+    if(load == loader_t::read) {
+      bufs[i] = reinterpret_cast<uint64_t*>(alloc_mem(load_bytes));
+      if(bufs[i] == nullptr) {
+	std::cout << "unable to mmap load buffer\n";
+	return -1;
+      }
+      for(size_t w = 0; w < load_words; w++) {
+	bufs[i][w] = w + 1;
+      }
     }
-    for(size_t w = 0; w < load_words; w++) {
-      bufs[i][w] = w + 1;
+    else if(load == loader_t::triad) {
+      bufs[i] = reinterpret_cast<uint64_t*>(alloc_mem(3*load_bytes));
+      for(size_t w = 0; w < (3*load_words); w++) {
+	bufs[i][w] = w + 1;
+      }      
+    }
+    else {
+      assert(false);
     }
   }
 
@@ -134,18 +146,26 @@ int run_loaded(uint64_t chain_nodes, int max_load_threads) {
 
   pin_to_cpu(0);
   size_t iters = chain_nodes * 8;
-  if(iters < (1UL<<22)) {
-    iters = (1UL<<22);
+  if(iters > iter_max) {
+    iters = iter_max;
   }
   iters &= ~static_cast<size_t>(31); /* traverse unrolls by 32 */
 
-  for(int k = 0; k <= max_load_threads; k++) {
+  for(int k = 0; k <= max_load_threads; k = std::min(k+step, max_load_threads)) {
     std::atomic<bool> go(false), stop(false);
     std::atomic<uint64_t> bytes(0);
     std::vector<std::thread> loaders;
+    
     for(int j = 0; j < k; j++) {
-      loaders.emplace_back(load_thread, j + 1, bufs[j], load_words,
-			   &go, &stop, &bytes);
+      loaders.emplace_back(load_thread,
+			   bind ? j + 1 : -1,
+			   load,			   
+			   bufs[j],
+			   load_words,
+			   std::ref<std::atomic<bool>>(go),
+			   std::ref<std::atomic<bool>>(stop),
+			   std::ref<std::atomic<uint64_t>>(bytes)
+			   );
     }
 
     cycle_counter cc;

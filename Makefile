@@ -1,5 +1,5 @@
 OBJ = mem_micro.o traverse.o loaded.o
-CXX = g++
+CXX = clang++-20 #g++
 EXE = mem_micro
 OPT = -O2
 CXXFLAGS = -std=c++11 -g $(OPT) -pthread
