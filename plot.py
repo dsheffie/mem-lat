@@ -68,7 +68,7 @@ def fmt_bytes(x, _pos=None):
         v, u = x, 'B'
     return ('%d %s' % (v, u)) if float(v).is_integer() else ('%.3g %s' % (v, u))
 
-def find_knees(ys, rise):
+def find_knees(ys, rise, min_gap=6):
     """Indices where a plateau ends: the two steps into point i are both
     below `rise` and the step out of it is at or above `rise`. Tolerates the
     gentle slope a shared cache shows before its edge."""
@@ -76,6 +76,9 @@ def find_knees(ys, rise):
     for i in range(2, len(ys) - 1):
         left_gentle = ys[i] / ys[i - 1] < rise and ys[i - 1] / ys[i - 2] < rise
         if left_gentle and ys[i + 1] / ys[i] >= rise:
+            # a bumpy region can fire several times in a row; keep the first
+            if knees and i - knees[-1] <= min_gap:
+                continue
             knees.append(i)
     return knees
 
