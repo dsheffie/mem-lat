@@ -3,8 +3,17 @@ Measure memory latency on Linux and macOS (Apple silicon) systems. Attempt to us
 Option to xor pointers to defeat linked-list prefetchers.
 
 The default mode sweeps working-set sizes from 16 bytes up to `-m` and reports
-latency per size (`cpu.csv`, plot with `plot.py`). The loaded mode (`-L`)
-measures latency under bandwidth load and is described below.
+latency per size (`cpu.csv`, plot with `plot.py`). By default the sizes are
+powers of two; `-p <n>` places `n` geometrically spaced sizes per doubling
+(`-p 4` gives 1, 1.19, 1.41, 1.68 x 2^k) so cache edges land between the
+powers of two. `-c` chooses which cpus the measurement may run on (see
+Flags). The loaded mode (`-L`) measures latency under bandwidth load and is
+described below.
+
+Note that rings whose node count divides the 32-way unroll (2, 4, 8, 16, 32
+nodes) still read well under one cycle per hop on Apple silicon: each unrolled
+load PC then always sees the same address and the value predictor wins.
+Off-power-of-two sizes from `-p` show the real L1 latency at those sizes.
 
 ## Loaded latency (`-L`)
 
@@ -85,11 +94,13 @@ kpc fixed cycle counter (true core cycles) on Apple silicon.
 
 | Flag | Default | Applies to | Meaning |
 |------|---------|------------|---------|
-| `-m <n>` | 23 | both modes | log2 of the number of chain nodes. At 8 bytes/node, `-m 23` = 64 MiB. Default mode sweeps sizes up to this; loaded mode uses exactly this size. |
+| `-m <n>` | 23 | both modes | log2 of the number of chain nodes. At 8 bytes/node, `-m 23` = 64 MiB, `-m 26` = 512 MiB. Default mode sweeps sizes up to this; loaded mode uses exactly this size. |
+| `-p <n>` | 1 | default mode | Sizes per octave in the sweep. 1 = powers of two only; `-p 4` adds three geometrically spaced sizes between each pair. |
+| `-c <spec>` | any | default mode | Cpus the latency chase may run on: a list/range (`6,7`, `8-11`) or, on macOS, a cluster type letter (`P`, `M`, `E`) resolved through the IO registry. Linux hard-pins with `sched_setaffinity`; macOS cannot pin, so each sample is checked with the cpu it started and ended on and redone (up to 8 times) if it ran elsewhere. The cpu the sample ended on is the fourth column of `cpu.csv`. |
 | `-L <n>` | off | selects loaded mode | Run the loaded-latency sweep with up to `n` load threads. `-1` (or anything above `ncpus - 1`) means "all remaining cpus". |
 | `-t` | read | loaded mode | Use the STREAM-triad load kernel instead of the read-only summation. |
 | `-s <n>` | 1 | loaded mode | Load-thread count increment for the sweep; the maximum count is always included as the final step. Values < 1 are coerced to 8. |
-| `-i <n>` | 2^27 | loaded mode | Upper bound on pointer-chase iterations per sweep step (the natural count is 8× the node count). |
+| `-i <n>` | 2^27 | both modes | Upper bound on pointer-chase iterations per size/step (the natural count is 16× the node count in the default sweep, 8× in loaded mode). Rounded down to a multiple of 32. |
 | `-b <0\|1>` | 1 | loaded mode | 1 = pin load thread `j` to cpu `j+1`; 0 = let load threads float over the process affinity mask. The latency thread is always pinned to cpu 0. |
 | `-x <0\|1>` | 0 | default mode | XOR the stored `next` pointers with a key (undone during the chase) so the in-memory values are not valid addresses, defeating linked-list/pointer prefetchers. |
 | `-a <0\|1>` | 0 | default mode | Chase with `atomic_fetch_add(ptr, 0)` instead of plain loads, measuring atomic-RMW latency over the same chain. |
@@ -170,4 +181,18 @@ is still valid.
   to the scheduler; `-b` has no effect. Do not expect load thread `k` to map
   to a specific core, and on parts with several core tiers the loaders may
   spill onto efficiency cores as `k` grows.
+- **Choosing a core tier with `-c`.** In the default sweep `-c P` (or an
+  explicit list such as `-c 6,7`) makes the run verify, via kperf, that each
+  sample started and ended on one of those cpus and repeat it otherwise. In
+  practice a lone interactive thread is placed on the fastest cluster anyway,
+  so the retries rarely fire. The cpu-to-cluster map comes from the IO
+  registry; to see it by hand:
+
+  ```
+  ioreg -l -w0 | grep -E '"cluster-type"|"logical-cpu-id"'
+  ```
+
+  On the M6 Mac mini cpus 0-5 are `E` (Efficiency), 6-7 are `P` (the two
+  Super cores, 128 KiB L1D, shared 20 MiB L2) and 8-11 are `M`
+  (Performance).
 

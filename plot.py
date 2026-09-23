@@ -33,7 +33,7 @@ plt.figure()
 plt.xlabel('size')
 plt.ylabel('latency (cycles)')
 plt.title(h + ' memory hierarchy')
-plt.xscale('log',basex=2)
+plt.xscale('log',base=2)
 plt.plot(ilist,clist,'--b')
 plt.savefig(pp,format='pdf')
 
