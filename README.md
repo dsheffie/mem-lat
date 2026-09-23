@@ -99,9 +99,11 @@ kpc fixed cycle counter (true core cycles) on Apple silicon.
 | Flag | Default | Applies to | Meaning |
 |------|---------|------------|---------|
 | `-m <n>` | 23 | both modes | log2 of the number of chain nodes. At 8 bytes/node, `-m 23` = 64 MiB, `-m 26` = 512 MiB. Default mode sweeps sizes up to this; loaded mode uses exactly this size. |
+| `-o <file>` | cpu.csv | default mode | Output csv path. |
 | `-n <n>` | 9 | default mode | log2 of the smallest chain to sweep. `-n 9` = 512 nodes = 4 KiB; `-n 1` starts at 16 bytes. |
 | `-p <n>` | 1 | default mode | Sizes per octave in the sweep. 1 = powers of two only; `-p 4` adds three geometrically spaced sizes between each pair. |
 | `-c <spec>` | any | default mode | Cpus the latency chase may run on: a list/range (`6,7`, `8-11`) or, on macOS, a cluster type letter (`P`, `M`, `E`) resolved through the IO registry. Linux hard-pins with `sched_setaffinity`; macOS cannot pin, so each sample is checked with the cpu it started and ended on and redone (up to 8 times) if it ran elsewhere. The cpu the sample ended on is the fourth column of `cpu.csv`. |
+| `-B <n>` | auto | default mode, macOS | Interactive spinner threads started for the whole sweep to hold the faster cores so the (lower QoS) latency thread spills onto the `-c` cluster. Default: the cpu count of the clusters faster than the target (2 for `-c M` on M6, 0 for `-c P` / `-c E`). The spinners touch no memory. |
 | `-L <n>` | off | selects loaded mode | Run the loaded-latency sweep with up to `n` load threads. `-1` (or anything above `ncpus - 1`) means "all remaining cpus". |
 | `-t` | read | loaded mode | Use the STREAM-triad load kernel instead of the read-only summation. |
 | `-s <n>` | 1 | loaded mode | Load-thread count increment for the sweep; the maximum count is always included as the final step. Values < 1 are coerced to 8. |
@@ -188,10 +190,22 @@ is still valid.
   spill onto efficiency cores as `k` grows.
 - **Choosing a core tier with `-c`.** In the default sweep `-c P` (or an
   explicit list such as `-c 6,7`) makes the run verify, via kperf, that each
-  sample started and ended on one of those cpus and repeat it otherwise. In
-  practice a lone interactive thread is placed on the fastest cluster anyway,
-  so the retries rarely fire. The cpu-to-cluster map comes from the IO
-  registry; to see it by hand:
+  sample started and ended on one of those cpus and repeat it otherwise.
+  Which cluster the scheduler picks is steered with QoS, measured on an M6
+  under macOS 26:
+
+  - `-c P`: a lone `USER_INTERACTIVE` thread lands on the fastest cluster.
+  - `-c E`: `BACKGROUND` QoS confines the thread to the efficiency cluster.
+  - `-c M`: nothing steers a lone thread to the middle cluster, so the run
+    starts `-B` interactive spinner threads (default: one per P core) to hold
+    the P cores and runs the latency thread at `UTILITY` QoS, which cannot
+    displace them. Equal QoS for spinners and measurer does not work; the
+    scheduler rotates them.
+
+  With those rules the retries essentially never fire. Note that the
+  cycles-per-ns ratio in the output is the core clock; compare it between
+  runs to see whether a lower QoS also bought a lower frequency. The
+  cpu-to-cluster map comes from the IO registry; to see it by hand:
 
   ```
   ioreg -l -w0 | grep -E '"cluster-type"|"logical-cpu-id"'

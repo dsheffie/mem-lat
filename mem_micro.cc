@@ -9,6 +9,8 @@
 #include <fstream>
 #include <cmath>
 #include <algorithm>
+#include <thread>
+#include <atomic>
 
 #include "mem_micro.hh"
 #include "perf.hh"
@@ -29,7 +31,9 @@ int main(int argc, char *argv[]) {
   int min_log2_keys = 9; /* 512 nodes = 4 KiB: below ~256 B the value predictor
                             short-circuits rings that divide the unroll */
   std::vector<int> cpus; /* empty = anywhere */
-  while ((c = getopt (argc, argv, "a:b:c:i:m:n:p:s:tx:L:")) != -1) {
+  int n_blockers = -1;   /* -B: interactive spinner threads to occupy faster cores */
+  const char *csv = "cpu.csv";
+  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tx:B:L:")) != -1) {
     switch(c)
       {
       case 'a':
@@ -54,6 +58,9 @@ int main(int argc, char *argv[]) {
       case 'n':
 	min_log2_keys = std::max(1, atoi(optarg));
 	break;
+      case 'o':
+	csv = optarg;
+	break;
       case 'p':
 	points_per_octave = std::max(1, atoi(optarg));
 	break;
@@ -65,6 +72,9 @@ int main(int argc, char *argv[]) {
 	break;
       case 'x':
 	xor_pointers = (atoi(optarg) != 0);
+	break;
+      case 'B':
+	n_blockers = std::max(0, atoi(optarg));
 	break;
       case 'L':
 	loaded = atoi(optarg);
@@ -82,8 +92,31 @@ int main(int argc, char *argv[]) {
   std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "
 	    << xor_pointers << "\n";
 
+  /* Without affinity, the only way onto a middle cluster is to fill the
+   * faster one: -B n starts n interactive threads that spin in registers
+   * (no memory traffic) for the whole sweep, so the latency thread (at a
+   * lower QoS) spills to the next cluster down. Verified per sample by the
+   * -c check. Default: enough to cover the clusters faster than -c. */
+  if(n_blockers < 0) {
+    n_blockers = default_blockers(cpus);
+  }
+  std::atomic<bool> stop_blockers(false);
+  std::vector<std::thread> blockers;
+  for(int i = 0; i < n_blockers; i++) {
+    blockers.emplace_back([&stop_blockers]() {
+      pin_to_cpus(std::vector<int>(), 0); /* interactive QoS */
+      volatile uint64_t x = 0;
+      while(!stop_blockers.load(std::memory_order_relaxed)) {
+	x += 1;
+      }
+    });
+  }
+  if(n_blockers) {
+    std::cout << n_blockers << " blocker thread(s) spinning\n";
+  }
+
   /* Linux: hard pin. macOS: QoS hint now, verify each sample below. */
-  bool pinned = pin_to_cpus(cpus);
+  bool pinned = pin_to_cpus(cpus, n_blockers);
   if(!cpus.empty()) {
     std::cout << (pinned ? "pinned to cpus " : "requiring samples on cpus ")
 	      << cpu_list_str(cpus) << "\n";
@@ -96,7 +129,7 @@ int main(int argc, char *argv[]) {
   }
   nodes = reinterpret_cast<node*>(ptr);
   
-  std::ofstream out("cpu.csv");
+  std::ofstream out(csv);
   std::vector<uint64_t> keys(max_keys);
 
   /* working set sizes: points_per_octave geometrically spaced sizes per
@@ -192,6 +225,10 @@ int main(int argc, char *argv[]) {
     out.flush();
   }
   out.close();
+  stop_blockers.store(true);
+  for(auto &t : blockers) {
+    t.join();
+  }
   munmap(ptr, sizeof(node)*max_keys);  
   return 0;
 }

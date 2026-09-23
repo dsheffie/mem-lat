@@ -19,8 +19,13 @@
  * "E" the Efficiency cores. On M1..M4 "P" is all performance cores. */
 
 int current_cpu();                                   /* -1 if unknown */
-bool pin_to_cpus(const std::vector<int> &cpus);       /* true = hard pinned */
+/* true = hard pinned. n_blockers > 0 means the caller is filling faster
+ * cores with interactive spinners, so this thread takes a lower QoS. */
+bool pin_to_cpus(const std::vector<int> &cpus, int n_blockers = 0);
 std::vector<int> cpus_of_cluster_type(char type);     /* macOS only, else empty */
+/* how many interactive spinner threads it takes to push a thread onto
+ * `cpus` (macOS: the cpu count of the clusters faster than the target) */
+int default_blockers(const std::vector<int> &cpus);
 
 /* "6,7" | "6-7" | "P" | "any" -> cpu list (empty = any) */
 static inline std::vector<int> parse_cpu_spec(const char *spec) {
@@ -72,7 +77,7 @@ static inline std::string cpu_list_str(const std::vector<int> &cpus) {
 #endif
 #include <sched.h>
 inline int current_cpu() { return sched_getcpu(); }
-inline bool pin_to_cpus(const std::vector<int> &cpus) {
+inline bool pin_to_cpus(const std::vector<int> &cpus, int) {
   if(cpus.empty()) return false;
   cpu_set_t set;
   CPU_ZERO(&set);
@@ -80,10 +85,12 @@ inline bool pin_to_cpus(const std::vector<int> &cpus) {
   return sched_setaffinity(0, sizeof(set), &set) == 0;
 }
 inline std::vector<int> cpus_of_cluster_type(char) { return std::vector<int>(); }
+inline int default_blockers(const std::vector<int> &) { return 0; }
 #elif !defined(__APPLE__)
 inline int current_cpu() { return -1; }
-inline bool pin_to_cpus(const std::vector<int> &) { return false; }
+inline bool pin_to_cpus(const std::vector<int> &, int) { return false; }
 inline std::vector<int> cpus_of_cluster_type(char) { return std::vector<int>(); }
+inline int default_blockers(const std::vector<int> &) { return 0; }
 #endif
 /* __APPLE__ : see placement.cc */
 

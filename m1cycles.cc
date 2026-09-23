@@ -159,17 +159,14 @@ static void init_rdtsc() {
 }
 
 void setup_performance_counters(void) {
+  /* QoS / core placement is the caller's business (see placement.hh); the
+   * original code forced USER_INTERACTIVE here, which silently undid any
+   * lower QoS chosen to reach the M or E clusters. */
   static bool done = false;
   if (done) {
     return;
   }
   done = true;
-  int test_high_perf_cores = 1;
-  if (test_high_perf_cores) {
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-  } else {
-    pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
-  }
   init_rdtsc();
 }
 

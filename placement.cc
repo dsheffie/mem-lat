@@ -36,12 +36,42 @@ int current_cpu() {
   return cpu;
 }
 
-bool pin_to_cpus(const std::vector<int> &cpus) {
-  /* best effort: interactive QoS steers the thread toward the fastest
-   * cluster, but the scheduler still chooses the core */
-  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-  (void)cpus;
+/* Measured on an M6 Mac mini (macOS 26): a lone USER_INTERACTIVE thread runs
+ * on the fastest (P/Super) cluster; BACKGROUND confines a thread to the E
+ * cluster; and a UTILITY thread with the P cores held by USER_INTERACTIVE
+ * spinners runs on the middle (M) cluster. Equal QoS for spinners and the
+ * measuring thread does not work: the scheduler rotates them. */
+static bool subset_of(const std::vector<int> &cpus, char type) {
+  if(cpus.empty()) return false;
+  std::vector<int> t = cpus_of_cluster_type(type);
+  for(int c : cpus) {
+    if(!cpu_in(t, c)) return false;
+  }
+  return true;
+}
+
+bool pin_to_cpus(const std::vector<int> &cpus, int n_blockers) {
+  qos_class_t qos = QOS_CLASS_USER_INTERACTIVE;
+  if(subset_of(cpus, 'E')) {
+    qos = QOS_CLASS_BACKGROUND;
+  }
+  else if(n_blockers > 0) {
+    qos = QOS_CLASS_UTILITY;
+  }
+  pthread_set_qos_class_self_np(qos, 0);
   return false;
+}
+
+int default_blockers(const std::vector<int> &cpus) {
+  if(cpus.empty() || subset_of(cpus, 'E')) {
+    return 0;
+  }
+  /* target contains no P cpu but some M cpu: hold the P cores */
+  std::vector<int> p = cpus_of_cluster_type('P');
+  for(int c : cpus) {
+    if(cpu_in(p, c)) return 0;
+  }
+  return static_cast<int>(p.size());
 }
 
 std::vector<int> cpus_of_cluster_type(char type) {
