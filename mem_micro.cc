@@ -34,11 +34,15 @@ int main(int argc, char *argv[]) {
   int n_blockers = -1;   /* -B: interactive spinner threads to occupy faster cores */
   const char *csv = "cpu.csv";
   int warmup_secs = 0;   /* -w: spin this long before the sweep (lets DVFS settle) */
-  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:B:L:")) != -1) {
+  int addressing = 0;    /* -A: 0 pointer chase, 1 base+byte offset, 2 base+scaled index */
+  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:A:B:L:")) != -1) {
     switch(c)
       {
       case 'a':
 	atomic = (atoi(optarg) != 0);
+	break;
+      case 'A':
+	addressing = atoi(optarg);
 	break;
       case 'b':
 	bind = (atoi(optarg) != 0);
@@ -95,6 +99,15 @@ int main(int argc, char *argv[]) {
 
   std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "
 	    << xor_pointers << "\n";
+  if(addressing) {
+    std::cout << "addressing: " << (addressing == 1 ? "base + byte offset (ldr [xB, xI])"
+					: "base + scaled index (ldr [xB, xI, lsl #3])")
+	      << "\n";
+    if(xor_pointers || atomic) {
+      std::cout << "-A is exclusive with -x and -a\n";
+      return -1;
+    }
+  }
 
   /* Without affinity, the only way onto a middle cluster is to fill the
    * faster one: -B n starts n interactive threads that spin in registers
@@ -200,6 +213,17 @@ int main(int argc, char *argv[]) {
 	nodes[i].next = xor_ptr<true>(nodes[i].next);
       }
     }
+    if(addressing) {
+      /* rewrite the ring in place: pointer -> offset from nodes[0] */
+      for(uint64_t i = 0; i < n_keys; i++) {
+	uint64_t d = static_cast<uint64_t>(nodes[i].next - nodes);
+	if(addressing == 1) {
+	  d *= sizeof(node);
+	}
+	std::memcpy(&nodes[i].next, &d, sizeof(d));
+      }
+    }
+    uint64_t start_off = static_cast<uint64_t>(h - nodes) * (addressing == 1 ? sizeof(node) : 1);
     
     size_t iters = n_keys*16;
     if(iters < (1UL<<20)) {
@@ -223,7 +247,13 @@ int main(int argc, char *argv[]) {
       auto start = std::chrono::high_resolution_clock::now();
       cc.enable_counter();
       auto c_start = cc.read_counter();
-      if(xor_pointers) {
+      if(addressing == 1) {
+	traverse_offset(nodes, start_off, iters);
+      }
+      else if(addressing == 2) {
+	traverse_index(nodes, start_off, iters);
+      }
+      else if(xor_pointers) {
 	traverse<true>(h, iters);
       }
       else {

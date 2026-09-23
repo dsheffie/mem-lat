@@ -87,6 +87,9 @@ static void shuffle(std::vector<T> &vec, size_t len) {
 
 template <bool xor_ptrs> node *traverse(node *n, uint64_t iters);
 node *atomic_traverse(node *n, uint64_t iters, uint64_t amt);
+/* -A 1: ring of byte offsets, ldr [base, off]; -A 2: element indices, ldr [base, idx, lsl #3] */
+uint64_t traverse_offset(const node *nodes, uint64_t off, uint64_t iters);
+uint64_t traverse_index(const node *nodes, uint64_t idx, uint64_t iters);
 
 int run_loaded(uint64_t chain_nodes,
 	       bool bind,

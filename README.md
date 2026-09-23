@@ -112,6 +112,7 @@ kpc fixed cycle counter (true core cycles) on Apple silicon.
 | `-b <0\|1>` | 1 | loaded mode | 1 = pin load thread `j` to cpu `j+1`; 0 = let load threads float over the process affinity mask. The latency thread is always pinned to cpu 0. |
 | `-x <0\|1>` | 0 | default mode | XOR the stored `next` pointers with a key (undone during the chase) so the in-memory values are not valid addresses, defeating linked-list/pointer prefetchers. |
 | `-a <0\|1>` | 0 | default mode | Chase with `atomic_fetch_add(ptr, 0)` instead of plain loads, measuring atomic-RMW latency over the same chain. |
+| `-A <0\|1\|2>` | 0 | default mode | Addressing mode of the chase load. 0: pointers, `ldr x1, [x1]`. 1: the ring holds byte offsets from the base, `ldr x1, [x0, x1]`. 2: element indices, `ldr x1, [x0, x1, lsl #3]`. Exposes any extra address-generation latency for register-offset forms (one cycle on M6). Exclusive with `-x` and `-a`. |
 
 ## Huge page behavior
 

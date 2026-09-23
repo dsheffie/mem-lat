@@ -88,3 +88,33 @@ node *atomic_traverse(node *n, uint64_t iters, uint64_t amt) {
   }
   return n;
 }
+
+/* Same chase, but the ring holds byte offsets (or element indices) relative
+ * to a fixed base instead of pointers, so the load must use register-offset
+ * addressing: ldr x1, [x0, x1] or ldr x1, [x0, x1, lsl #3] instead of
+ * ldr x1, [x1]. Lets you measure whether base+index adds a cycle. */
+#define OFF_STEP  off = *reinterpret_cast<const uint64_t*>(base + off);
+#define OFF_STEP4  OFF_STEP OFF_STEP OFF_STEP OFF_STEP
+#define OFF_STEP16 OFF_STEP4 OFF_STEP4 OFF_STEP4 OFF_STEP4
+
+uint64_t traverse_offset(const node *nodes, uint64_t off, uint64_t iters) {
+  const char *base = reinterpret_cast<const char*>(nodes);
+  while(iters) {
+    OFF_STEP16 OFF_STEP16
+    iters -= 32;
+  }
+  return off;
+}
+
+#define IDX_STEP  idx = base[idx];
+#define IDX_STEP4  IDX_STEP IDX_STEP IDX_STEP IDX_STEP
+#define IDX_STEP16 IDX_STEP4 IDX_STEP4 IDX_STEP4 IDX_STEP4
+
+uint64_t traverse_index(const node *nodes, uint64_t idx, uint64_t iters) {
+  const uint64_t *base = reinterpret_cast<const uint64_t*>(nodes);
+  while(iters) {
+    IDX_STEP16 IDX_STEP16
+    iters -= 32;
+  }
+  return idx;
+}
