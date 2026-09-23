@@ -2,18 +2,22 @@
 Measure memory latency on Linux and macOS (Apple silicon) systems. Attempt to use hugeTLB when possible to avoid TLB miss latency.
 Option to xor pointers to defeat linked-list prefetchers.
 
-The default mode sweeps working-set sizes from 16 bytes up to `-m` and reports
-latency per size (`cpu.csv`, plot with `plot.py`). By default the sizes are
-powers of two; `-p <n>` places `n` geometrically spaced sizes per doubling
-(`-p 4` gives 1, 1.19, 1.41, 1.68 x 2^k) so cache edges land between the
-powers of two. `-c` chooses which cpus the measurement may run on (see
-Flags). The loaded mode (`-L`) measures latency under bandwidth load and is
-described below.
+The default mode sweeps working-set sizes from `-n` (default 4 KiB) up to
+`-m` and reports latency per size (`cpu.csv`, plot with `plot.py`). By
+default the sizes are powers of two; `-p <n>` places `n` geometrically spaced
+sizes per doubling (`-p 4` gives 1, 1.19, 1.41, 1.68 x 2^k) so cache edges
+land between the powers of two. `-c` chooses which cpus the measurement may
+run on (see Flags). The loaded mode (`-L`) measures latency under bandwidth
+load and is described below.
 
-Note that rings whose node count divides the 32-way unroll (2, 4, 8, 16, 32
-nodes) still read well under one cycle per hop on Apple silicon: each unrolled
-load PC then always sees the same address and the value predictor wins.
-Off-power-of-two sizes from `-p` show the real L1 latency at those sizes.
+The sweep starts at 4 KiB because rings whose node count divides the 32-way
+unroll (2, 4, 8, 16, 32 nodes, i.e. up to 256 bytes) read well under one
+cycle per hop on Apple silicon: each unrolled load PC then always sees the
+same address and a last-value predictor wins. Rings that do not divide the
+unroll (3, 5, 31, 64, ...) are not predicted, so this is a per-PC last-value
+predictor; a larger power-of-two unroll would only widen the affected set,
+while a prime unroll would shrink it to the trivial ring and the ring equal
+to the unroll count. Use `-n 1` to sweep from 16 bytes anyway.
 
 ## Loaded latency (`-L`)
 
@@ -95,6 +99,7 @@ kpc fixed cycle counter (true core cycles) on Apple silicon.
 | Flag | Default | Applies to | Meaning |
 |------|---------|------------|---------|
 | `-m <n>` | 23 | both modes | log2 of the number of chain nodes. At 8 bytes/node, `-m 23` = 64 MiB, `-m 26` = 512 MiB. Default mode sweeps sizes up to this; loaded mode uses exactly this size. |
+| `-n <n>` | 9 | default mode | log2 of the smallest chain to sweep. `-n 9` = 512 nodes = 4 KiB; `-n 1` starts at 16 bytes. |
 | `-p <n>` | 1 | default mode | Sizes per octave in the sweep. 1 = powers of two only; `-p 4` adds three geometrically spaced sizes between each pair. |
 | `-c <spec>` | any | default mode | Cpus the latency chase may run on: a list/range (`6,7`, `8-11`) or, on macOS, a cluster type letter (`P`, `M`, `E`) resolved through the IO registry. Linux hard-pins with `sched_setaffinity`; macOS cannot pin, so each sample is checked with the cpu it started and ended on and redone (up to 8 times) if it ran elsewhere. The cpu the sample ended on is the fourth column of `cpu.csv`. |
 | `-L <n>` | off | selects loaded mode | Run the loaded-latency sweep with up to `n` load threads. `-1` (or anything above `ncpus - 1`) means "all remaining cpus". |

@@ -26,8 +26,10 @@ int main(int argc, char *argv[]) {
   int step = 1;
   uint64_t max_iters = 1UL<<27;
   int points_per_octave = 1;
+  int min_log2_keys = 9; /* 512 nodes = 4 KiB: below ~256 B the value predictor
+                            short-circuits rings that divide the unroll */
   std::vector<int> cpus; /* empty = anywhere */
-  while ((c = getopt (argc, argv, "a:b:c:i:m:p:s:tx:L:")) != -1) {
+  while ((c = getopt (argc, argv, "a:b:c:i:m:n:p:s:tx:L:")) != -1) {
     switch(c)
       {
       case 'a':
@@ -48,6 +50,9 @@ int main(int argc, char *argv[]) {
 	break;
       case 'm':
 	max_keys = 1UL << atoi(optarg);
+	break;
+      case 'n':
+	min_log2_keys = std::max(1, atoi(optarg));
 	break;
       case 'p':
 	points_per_octave = std::max(1, atoi(optarg));
@@ -95,9 +100,9 @@ int main(int argc, char *argv[]) {
   std::vector<uint64_t> keys(max_keys);
 
   /* working set sizes: points_per_octave geometrically spaced sizes per
-   * doubling, starting at 2 nodes; -p 1 is the classic power-of-two sweep */
+   * doubling, from 2^-n to 2^-m nodes; -p 1 is the classic power-of-two sweep */
   std::vector<uint64_t> sizes;
-  for(int octave = 1; ; octave++) {
+  for(int octave = min_log2_keys; ; octave++) {
     bool any = false;
     for(int j = 0; j < points_per_octave; j++) {
       double e = octave + static_cast<double>(j) / points_per_octave;
