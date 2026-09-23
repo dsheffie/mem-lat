@@ -2,7 +2,7 @@
 """Plot a mem_micro default-sweep csv (size,cycles,ns[,cpu]) as <name>.pdf.
 
 usage: plot.py [cpu.csv] [--out NAME.pdf] [--title T] [--mark BYTES:LABEL ...]
-               [--png] [--linear-y] [--no-table]
+               [--png] [--linear-y] [--no-table] [--no-knees]
 
 Page 1 is the chart, both axes log scaled by default (capacity base 2,
 latency base 10); the following pages tabulate the raw csv rows.
@@ -30,6 +30,9 @@ ap.add_argument('--mark', action='append', default=[],
 ap.add_argument('--png', action='store_true', help='also write a png')
 ap.add_argument('--linear-y', action='store_true', help='linear latency axis (default log)')
 ap.add_argument('--no-table', action='store_true', help='omit the raw data table pages')
+ap.add_argument('--no-knees', action='store_true', help='do not mark plateau knees')
+ap.add_argument('--knee-rise', type=float, default=1.15,
+                help='latency ratio between neighbours that counts as leaving a plateau')
 args = ap.parse_args()
 
 sizes, cycles, ns, cpus = [], [], [], []
@@ -65,6 +68,18 @@ def fmt_bytes(x, _pos=None):
         v, u = x, 'B'
     return ('%d %s' % (v, u)) if float(v).is_integer() else ('%.3g %s' % (v, u))
 
+def find_knees(ys, rise, flat=1.08):
+    """Indices of the last point of each plateau: flat on the left (the two
+    previous steps each grew less than `flat`), then a step of >= `rise`."""
+    knees = []
+    for i in range(2, len(ys) - 1):
+        left_flat = ys[i] / ys[i - 1] < flat and ys[i - 1] / ys[i - 2] < flat
+        if left_flat and ys[i + 1] / ys[i] >= rise:
+            knees.append(i)
+    return knees
+
+knees = [] if args.no_knees else find_knees(cycles, args.knee_rise)
+
 plt.rcParams.update({
     'font.size': 9, 'axes.edgecolor': AXIS, 'axes.labelcolor': INK,
     'xtick.color': MUTED, 'ytick.color': MUTED, 'axes.titlecolor': INK,
@@ -85,19 +100,34 @@ for ax, ys, ylabel in ((ax_c, cycles, 'latency (core cycles)'),
         ax.set_ylim(bottom=0)
     else:
         ax.set_yscale('log')
-        ax.set_ylim(min(ys) * 0.7, max(ys) * 1.5)
+        ax.set_ylim(min(ys) * 0.55, max(ys) * 1.6)
         ax.yaxis.set_major_locator(LogLocator(base=10, numticks=8))
         ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _p: '%g' % v))
-        ax.yaxis.set_minor_formatter(NullFormatter())
+        # label the 2/3/5 minor ticks so a plateau at 3 is readable
+        ax.yaxis.set_minor_locator(LogLocator(base=10, subs=(2, 3, 5), numticks=12))
+        ax.yaxis.set_minor_formatter(FuncFormatter(lambda v, _p: '%g' % v))
+        ax.tick_params(axis='y', which='minor', labelsize=7, labelcolor=MUTED)
     ax.grid(True, axis='y', which='major', color=GRID, linewidth=0.8, zorder=0)
     if not args.linear_y:
         ax.grid(True, axis='y', which='minor', color=GRID, linewidth=0.4, zorder=0)
-    ax.tick_params(length=0)
+    ax.tick_params(length=0, which='both')
     for spine in ('left',):
         ax.spines[spine].set_visible(False)
-    # direct label on the last point only
-    ax.annotate('%.1f' % ys[-1], (sizes[-1], ys[-1]), xytext=(4, 0),
+    unit = 'cyc' if ys is cycles else 'ns'
+    # direct labels: first plateau level, last point, and each knee
+    ax.annotate('%.1f %s' % (ys[0], unit), (sizes[0], ys[0]), xytext=(0, 7),
+                textcoords='offset points', ha='left', va='bottom',
+                fontsize=8, color=INK)
+    ax.annotate('%.1f %s' % (ys[-1], unit), (sizes[-1], ys[-1]), xytext=(4, 0),
                 textcoords='offset points', va='center', fontsize=8, color=INK)
+    for k in knees:
+        ax.plot([sizes[k]], [ys[k]], marker='o', markersize=6, color=SERIES,
+                markeredgecolor='white', markeredgewidth=1.2, zorder=4)
+        ax.annotate('%s\n%.1f %s' % (fmt_bytes(sizes[k]), ys[k], unit),
+                    (sizes[k], ys[k]), xytext=(-8, 14), textcoords='offset points',
+                    ha='right', va='bottom', fontsize=7.5, color=INK,
+                    arrowprops=dict(arrowstyle='-', color=MUTED, linewidth=0.7,
+                                    shrinkA=0, shrinkB=3))
 
 ax_n.set_xscale('log', base=2)
 ax_n.set_xlabel('working set (bytes, log2)')
