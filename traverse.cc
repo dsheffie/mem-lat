@@ -1,5 +1,4 @@
 #include "mem_micro.hh"
-#include <cstdio>
 
 template <bool xor_ptrs>
 node *traverse(node *n, uint64_t iters) {
@@ -8,7 +7,35 @@ node *traverse(node *n, uint64_t iters) {
     n = xor_ptr<xor_ptrs>(n->next);
     n = xor_ptr<xor_ptrs>(n->next);
     n = xor_ptr<xor_ptrs>(n->next);
-    iters -= 4;
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    n = xor_ptr<xor_ptrs>(n->next);
+    iters -= 32;
   }
   return n;
 }
@@ -16,7 +43,6 @@ node *traverse(node *n, uint64_t iters) {
 
 template node* traverse<true>(node*, uint64_t);
 template node* traverse<false>(node*, uint64_t);
-
 
 static node *get_next(node *n, uint64_t amt) {
   uint64_t *p = reinterpret_cast<uint64_t*>(n);
@@ -30,7 +56,35 @@ node *atomic_traverse(node *n, uint64_t iters, uint64_t amt) {
     n = get_next(n, amt);
     n = get_next(n, amt);
     n = get_next(n, amt);
-    iters -= 4;
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    n = get_next(n, amt);
+    iters -= 32;
   }
   return n;
 }

@@ -9,74 +9,66 @@
 #include <fstream>
 
 #include "mem_micro.hh"
-#include "m1cycles.hh"
+#include "perf.hh"
 
-#define PROT (PROT_READ | PROT_WRITE)
-#define MAP (MAP_ANONYMOUS|MAP_PRIVATE)
-
-template <typename T>
-void swap(T &x, T &y) {
-  T t = x;
-  x = y; y = t;
-}
-
-template <typename T>
-void shuffle(std::vector<T> &vec, size_t len) {
-  for(size_t i = 0; i < len; i++) {
-    size_t j = i + (rand() % (len - i));
-    swap(vec[i], vec[j]);
-  }
-}
   
 int main(int argc, char *argv[]) {
   int c;
   uint64_t max_keys = 1UL<<23;
   void *ptr = nullptr;
   node *nodes = nullptr;
-  bool xor_pointers = false, atomic = false;
-
-  while ((c = getopt (argc, argv, "a:m:x:")) != -1) {
+  bool xor_pointers = false, atomic = false, bind = true;
+  int loaded = -2; /* -2 = off; >= -1 selects loaded mode (-1 = all cpus) */
+  loader_t load = loader_t::read;
+  int step = 1;
+  uint64_t max_iters = 1UL<<27;
+  while ((c = getopt (argc, argv, "a:b:i:m:s:tx:L:")) != -1) {
     switch(c)
       {
       case 'a':
 	atomic = (atoi(optarg) != 0);
 	break;
+      case 'b':
+	bind = (atoi(optarg) != 0);
+	break;
+      case 'i':
+	max_iters = atoll(optarg);
+	break;
       case 'm':
 	max_keys = 1UL << atoi(optarg);
 	break;
+      case 's':
+	step = atoi(optarg);
+	break;
+      case 't':
+	load = loader_t::triad;
+	break;
       case 'x':
 	xor_pointers = (atoi(optarg) != 0);
+	break;
+      case 'L':
+	loaded = atoi(optarg);
 	break;
       default:
 	break;
       }
   }
 
+  if(loaded != -2) {
+    step = (step < 1) ? 8 : step;
+    return run_loaded(max_keys, bind, loaded, load, step, max_iters);
+  }
+
   std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "
 	    << xor_pointers << "\n";
-  
-  ptr = mmap(nullptr, sizeof(node)*max_keys, PROT, MAP, -1, 0);
 
-  if(ptr == failed_mmap) {
-    ptr = mmap(nullptr, sizeof(node)*max_keys, PROT, MAP, -1, 0);
-    if(ptr == failed_mmap) {
-      std::cout << "unable to mmap memory\n";
-      return -1;
-    }
-    else {
-      std::cout << "unable to allocate memory with hugetlb\n";
-    }
-  }
-  else {
-    std::cout << "allocated nodes with hugetlb\n";
-  }
+  ptr = alloc_mem(sizeof(node)*max_keys);
   nodes = reinterpret_cast<node*>(ptr);
   
   std::ofstream out("cpu.csv");
   std::vector<uint64_t> keys(max_keys);
-  setup_performance_counters();
   
-  for(uint64_t n_keys = 1; n_keys <= 16; n_keys++) {
+  for(uint64_t n_keys = 1UL<<1; n_keys <= max_keys; n_keys *= 2) {
     
     for(uint64_t i = 0; i < n_keys; i++) {
       keys[i] = i;
@@ -104,8 +96,11 @@ int main(int argc, char *argv[]) {
     if(iters < (1UL<<20)) {
       iters = (1UL<<20);
     }
-
-    performance_counters c0 = get_counters();
+    cycle_counter cc;
+    cc.reset_counter();    
+    auto start = std::chrono::high_resolution_clock::now();
+    cc.enable_counter();
+    auto c_start = cc.read_counter();
     if(xor_pointers) {
       traverse<true>(h, iters);
     }
@@ -117,14 +112,15 @@ int main(int argc, char *argv[]) {
 	traverse<false>(h, iters);
       }
     }
-    performance_counters c1 = get_counters();
-    double c_stop = c1.cycles;
-    double c_start = c0.cycles;
-    
+    auto c_stop = cc.read_counter();    
+    auto stop = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = stop-start;
+    double t = elapsed.count() / (1e-9);
     double c_t = static_cast<double>(c_stop-c_start);        
+    t /= iters;
     c_t /= iters;
-    std::cout << (n_keys*sizeof(node)) << "," << c_t <<" cycles\n";
-    out << (n_keys*sizeof(node)) << "," << c_t <<"\n";
+    std::cout << (n_keys*sizeof(node)) << "," << c_t <<" cycles," <<t << " ns \n";
+    out << (n_keys*sizeof(node)) << "," << c_t <<"," << t << "\n";
     out.flush();
   }
   out.close();

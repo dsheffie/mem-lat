@@ -159,6 +159,11 @@ static void init_rdtsc() {
 }
 
 void setup_performance_counters(void) {
+  static bool done = false;
+  if (done) {
+    return;
+  }
+  done = true;
   int test_high_perf_cores = 1;
   if (test_high_perf_cores) {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);

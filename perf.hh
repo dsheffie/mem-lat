@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include <cstdint>
 
 #ifdef __amd64__
 class cycle_counter {
@@ -20,6 +21,22 @@ public:
     return ( (uint64_t)lo)|( ((uint64_t)hi)<<32 );
   }
 };
+#elif defined(__APPLE__)
+/* Apple silicon: core cycles from the kpc fixed counter (needs root). The
+ * counters are per-thread once kpc_set_thread_counting is on, so each thread
+ * that measures must construct its own cycle_counter. */
+#include "m1cycles.hh"
+class cycle_counter {
+public:
+  cycle_counter() { setup_performance_counters(); }
+  ~cycle_counter() {}
+  void reset_counter() {}
+  void enable_counter() {}
+  void disable_counter() {}
+  uint64_t read_counter() {
+    return static_cast<uint64_t>(get_counters().cycles);
+  }
+};
 #else
 #include <cstdio>
 #include <cstdlib>
@@ -29,7 +46,6 @@ public:
 #include <sys/file.h>
 #include <sys/time.h>
 #include <cassert>
-#include <cstdint>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <linux/unistd.h>
