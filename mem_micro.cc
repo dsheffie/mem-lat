@@ -33,7 +33,8 @@ int main(int argc, char *argv[]) {
   std::vector<int> cpus; /* empty = anywhere */
   int n_blockers = -1;   /* -B: interactive spinner threads to occupy faster cores */
   const char *csv = "cpu.csv";
-  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tx:B:L:")) != -1) {
+  int warmup_secs = 0;   /* -w: spin this long before the sweep (lets DVFS settle) */
+  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:B:L:")) != -1) {
     switch(c)
       {
       case 'a':
@@ -69,6 +70,9 @@ int main(int argc, char *argv[]) {
 	break;
       case 't':
 	load = loader_t::triad;
+	break;
+      case 'w':
+	warmup_secs = std::max(0, atoi(optarg));
 	break;
       case 'x':
 	xor_pointers = (atoi(optarg) != 0);
@@ -128,6 +132,30 @@ int main(int argc, char *argv[]) {
     return -1;
   }
   nodes = reinterpret_cast<node*>(ptr);
+
+  /* Optional warm-up at the sweep's QoS so the cluster's DVFS state has
+   * settled before the first sample; reports the clock it reached. */
+  if(warmup_secs > 0) {
+    cycle_counter cc;
+    cc.reset_counter();
+    cc.enable_counter();
+    volatile uint64_t x = 0;
+    auto t_end = std::chrono::steady_clock::now() + std::chrono::seconds(warmup_secs);
+    double ghz = 0.0;
+    while(std::chrono::steady_clock::now() < t_end) {
+      auto c0 = cc.read_counter();
+      auto t0 = std::chrono::steady_clock::now();
+      for(uint64_t j = 0; j < (1UL<<26); j++) {
+	x += j;
+      }
+      auto c1 = cc.read_counter();
+      auto t1 = std::chrono::steady_clock::now();
+      ghz = static_cast<double>(c1 - c0) /
+	std::chrono::duration<double, std::nano>(t1 - t0).count();
+    }
+    std::cout << "warm-up " << warmup_secs << " s, clock now " << ghz
+	      << " GHz on cpu " << current_cpu() << "\n";
+  }
   
   std::ofstream out(csv);
   std::vector<uint64_t> keys(max_keys);

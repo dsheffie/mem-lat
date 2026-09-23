@@ -68,13 +68,14 @@ def fmt_bytes(x, _pos=None):
         v, u = x, 'B'
     return ('%d %s' % (v, u)) if float(v).is_integer() else ('%.3g %s' % (v, u))
 
-def find_knees(ys, rise, flat=1.08):
-    """Indices of the last point of each plateau: flat on the left (the two
-    previous steps each grew less than `flat`), then a step of >= `rise`."""
+def find_knees(ys, rise):
+    """Indices where a plateau ends: the two steps into point i are both
+    below `rise` and the step out of it is at or above `rise`. Tolerates the
+    gentle slope a shared cache shows before its edge."""
     knees = []
     for i in range(2, len(ys) - 1):
-        left_flat = ys[i] / ys[i - 1] < flat and ys[i - 1] / ys[i - 2] < flat
-        if left_flat and ys[i + 1] / ys[i] >= rise:
+        left_gentle = ys[i] / ys[i - 1] < rise and ys[i - 1] / ys[i - 2] < rise
+        if left_gentle and ys[i + 1] / ys[i] >= rise:
             knees.append(i)
     return knees
 
@@ -86,8 +87,11 @@ plt.rcParams.update({
     'axes.spines.top': False, 'axes.spines.right': False,
 })
 
-fig, (ax_c, ax_n) = plt.subplots(2, 1, sharex=True, figsize=(7.5, 6.2),
-                                 gridspec_kw={'hspace': 0.12})
+ghz = [c / t if t > 0 else 0.0 for c, t in zip(cycles, ns)]
+
+fig, (ax_c, ax_n, ax_f) = plt.subplots(
+    3, 1, sharex=True, figsize=(7.5, 7.4),
+    gridspec_kw={'hspace': 0.12, 'height_ratios': [3, 3, 1.1]})
 fig.suptitle(title, x=0.02, ha='left', fontsize=12, color=INK)
 
 for ax, ys, ylabel in ((ax_c, cycles, 'latency (core cycles)'),
@@ -129,22 +133,36 @@ for ax, ys, ylabel in ((ax_c, cycles, 'latency (core cycles)'),
                     arrowprops=dict(arrowstyle='-', color=MUTED, linewidth=0.7,
                                     shrinkA=0, shrinkB=3))
 
-ax_n.set_xscale('log', base=2)
-ax_n.set_xlabel('working set (bytes, log2)')
-ax_n.xaxis.set_major_locator(LogLocator(base=2, numticks=32))
-ax_n.xaxis.set_major_formatter(FuncFormatter(fmt_bytes))
-ax_n.xaxis.set_minor_formatter(NullFormatter())
-ax_n.set_xlim(min(sizes) * 0.8, max(sizes) * 1.6)
+# implied core clock per sample: shows DVFS shifts that would otherwise hide
+# in the cycles column (e.g. a cluster changing frequency mid-sweep)
+ax_f.plot(sizes, ghz, color=SERIES, linewidth=1.2, marker='o', markersize=2.5,
+          markerfacecolor='white', markeredgewidth=0.9, zorder=3)
+ax_f.set_ylabel('clock (GHz)')
+ax_f.set_ylim(0, max(ghz) * 1.35)
+ax_f.grid(True, axis='y', color=GRID, linewidth=0.8, zorder=0)
+ax_f.tick_params(length=0)
+ax_f.spines['left'].set_visible(False)
+ax_f.annotate('%.2f' % ghz[-1], (sizes[-1], ghz[-1]), xytext=(4, 0),
+              textcoords='offset points', va='center', fontsize=8, color=INK)
+ax_f.annotate('cycles / ns', (0.01, 0.92), xycoords='axes fraction',
+              va='top', fontsize=7.5, color=MUTED)
+
+ax_f.set_xscale('log', base=2)
+ax_f.set_xlabel('working set (bytes, log2)')
+ax_f.xaxis.set_major_locator(LogLocator(base=2, numticks=32))
+ax_f.xaxis.set_major_formatter(FuncFormatter(fmt_bytes))
+ax_f.xaxis.set_minor_formatter(NullFormatter())
+ax_f.set_xlim(min(sizes) * 0.8, max(sizes) * 1.6)
 # thin the tick labels so they don't collide
-for i, lab in enumerate(ax_n.get_xticklabels()):
+for i, lab in enumerate(ax_f.get_xticklabels()):
     if i % 2:
         lab.set_visible(False)
-plt.setp(ax_n.get_xticklabels(), rotation=45, ha='right')
+plt.setp(ax_f.get_xticklabels(), rotation=45, ha='right')
 
 for spec in args.mark:
     b, _, label = spec.partition(':')
     b = int(b)
-    for ax in (ax_c, ax_n):
+    for ax in (ax_c, ax_n, ax_f):
         ax.axvline(b, color=AXIS, linewidth=0.9, linestyle=(0, (4, 3)), zorder=1)
     ax_c.annotate(label or fmt_bytes(b), (b, 1), xycoords=('data', 'axes fraction'),
                   xytext=(3, -2), textcoords='offset points', va='top',
@@ -152,9 +170,9 @@ for spec in args.mark:
 
 def table_pages(pdf, rows_per_page=52):
     """Raw data as monospaced text pages after the chart."""
-    header = '%-12s %14s %10s %10s %5s' % ('size', 'bytes', 'cycles', 'ns', 'cpu')
-    rows = ['%-12s %14d %10.2f %10.3f %5s' % (fmt_bytes(b), b, c, t, u)
-            for b, c, t, u in zip(sizes, cycles, ns, cpus)]
+    header = '%-12s %14s %10s %10s %7s %5s' % ('size', 'bytes', 'cycles', 'ns', 'GHz', 'cpu')
+    rows = ['%-12s %14d %10.2f %10.3f %7.2f %5s' % (fmt_bytes(b), b, c, t, g, u)
+            for b, c, t, g, u in zip(sizes, cycles, ns, ghz, cpus)]
     npages = max(1, (len(rows) + rows_per_page - 1) // rows_per_page)
     for pg in range(npages):
         chunk = rows[pg * rows_per_page:(pg + 1) * rows_per_page]

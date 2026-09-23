@@ -100,6 +100,7 @@ kpc fixed cycle counter (true core cycles) on Apple silicon.
 |------|---------|------------|---------|
 | `-m <n>` | 23 | both modes | log2 of the number of chain nodes. At 8 bytes/node, `-m 23` = 64 MiB, `-m 26` = 512 MiB. Default mode sweeps sizes up to this; loaded mode uses exactly this size. |
 | `-o <file>` | cpu.csv | default mode | Output csv path. |
+| `-w <sec>` | 0 | default mode | Spin for this long at the sweep's QoS before the first sample and print the clock reached, so a cluster's DVFS state settles first. The clock at any row is `cycles / ns` in the csv. |
 | `-n <n>` | 9 | default mode | log2 of the smallest chain to sweep. `-n 9` = 512 nodes = 4 KiB; `-n 1` starts at 16 bytes. |
 | `-p <n>` | 1 | default mode | Sizes per octave in the sweep. 1 = powers of two only; `-p 4` adds three geometrically spaced sizes between each pair. |
 | `-c <spec>` | any | default mode | Cpus the latency chase may run on: a list/range (`6,7`, `8-11`) or, on macOS, a cluster type letter (`P`, `M`, `E`) resolved through the IO registry. Linux hard-pins with `sched_setaffinity`; macOS cannot pin, so each sample is checked with the cpu it started and ended on and redone (up to 8 times) if it ran elsewhere. The cpu the sample ended on is the fourth column of `cpu.csv`. |
