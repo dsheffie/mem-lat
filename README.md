@@ -112,6 +112,7 @@ kpc fixed cycle counter (true core cycles) on Apple silicon.
 | `-b <0\|1>` | 1 | loaded mode | 1 = pin load thread `j` to cpu `j+1`; 0 = let load threads float over the process affinity mask. The latency thread is always pinned to cpu 0. |
 | `-x <0\|1>` | 0 | default mode | XOR the stored `next` pointers with a key (undone during the chase) so the in-memory values are not valid addresses, defeating linked-list/pointer prefetchers. |
 | `-a <0\|1>` | 0 | default mode | Chase with `atomic_fetch_add(ptr, 0)` instead of plain loads, measuring atomic-RMW latency over the same chain. |
+| `-D <bytes>` | 0 | default mode | Chase with a base + immediate load, `ldr x1, [x1, #D]`: the ring holds pointers biased by `-D` so the effective address is unchanged. `D` must be one of 8, 64, 256, 4096, 32760 (scaled `ldr` immediates) or 1, -8, -256 (unscaled `ldur` forms). On M6 none of them costs anything over the plain load (3 cycles L1); only the register-offset forms of `-A` do. Exclusive with `-A`, `-x`, `-a`. |
 | `-A <0\|1\|2>` | 0 | default mode | Addressing mode of the chase load. 0: pointers, `ldr x1, [x1]`. 1: the ring holds byte offsets from the base, `ldr x1, [x0, x1]`. 2: element indices, `ldr x1, [x0, x1, lsl #3]`. Exposes any extra address-generation latency for register-offset forms (one cycle on M6). Exclusive with `-x` and `-a`. |
 
 ## Huge page behavior

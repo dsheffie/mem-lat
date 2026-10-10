@@ -118,3 +118,34 @@ uint64_t traverse_index(const node *nodes, uint64_t idx, uint64_t iters) {
   }
   return idx;
 }
+
+/* Base + immediate displacement: the ring holds biased pointers (next - D)
+ * and the chase loads from biased + D, so the effective address is the
+ * same node as the plain pointer chase but the instruction is
+ * ldr x8, [x8, #D] (or ldur for negative / unscaled D). */
+#define DISP_STEP  b = *reinterpret_cast<const intptr_t*>(b + D);
+#define DISP_STEP4  DISP_STEP DISP_STEP DISP_STEP DISP_STEP
+#define DISP_STEP16 DISP_STEP4 DISP_STEP4 DISP_STEP4 DISP_STEP4
+
+template <int D>
+intptr_t traverse_disp(intptr_t b, uint64_t iters) {
+  while(iters) {
+    DISP_STEP16 DISP_STEP16
+    iters -= 32;
+  }
+  return b;
+}
+
+#define DISP_LIST X(8) X(64) X(256) X(4096) X(32760) X(1) X(-8) X(-256)
+#define X(d) template intptr_t traverse_disp<d>(intptr_t, uint64_t);
+DISP_LIST
+#undef X
+
+intptr_t traverse_disp_dyn(int d, intptr_t b, uint64_t iters) {
+  switch(d) {
+#define X(dd) case dd: return traverse_disp<dd>(b, iters);
+    DISP_LIST
+#undef X
+  default: return 0;
+  }
+}

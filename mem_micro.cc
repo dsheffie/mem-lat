@@ -35,7 +35,8 @@ int main(int argc, char *argv[]) {
   const char *csv = "cpu.csv";
   int warmup_secs = 0;   /* -w: spin this long before the sweep (lets DVFS settle) */
   int addressing = 0;    /* -A: 0 pointer chase, 1 base+byte offset, 2 base+scaled index */
-  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:A:B:L:")) != -1) {
+  int disp = 0;          /* -D: base + immediate displacement chase */
+  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:A:B:D:L:")) != -1) {
     switch(c)
       {
       case 'a':
@@ -84,6 +85,9 @@ int main(int argc, char *argv[]) {
       case 'B':
 	n_blockers = std::max(0, atoi(optarg));
 	break;
+      case 'D':
+	disp = atoi(optarg);
+	break;
       case 'L':
 	loaded = atoi(optarg);
 	break;
@@ -107,6 +111,13 @@ int main(int argc, char *argv[]) {
       std::cout << "-A is exclusive with -x and -a\n";
       return -1;
     }
+  }
+  if(disp) {
+    if(traverse_disp_dyn(disp, 0, 0) != 0 || addressing || xor_pointers || atomic) {
+      std::cout << "-D needs one of 8 64 256 4096 32760 1 -8 -256 and no -A/-x/-a\n";
+      return -1;
+    }
+    std::cout << "addressing: base + immediate (ldr [x, #" << disp << "])\n";
   }
 
   /* Without affinity, the only way onto a middle cluster is to fill the
@@ -224,6 +235,14 @@ int main(int argc, char *argv[]) {
       }
     }
     uint64_t start_off = static_cast<uint64_t>(h - nodes) * (addressing == 1 ? sizeof(node) : 1);
+    if(disp) {
+      /* bias every stored pointer by -disp; the chase adds it back */
+      for(uint64_t i = 0; i < n_keys; i++) {
+	intptr_t v = reinterpret_cast<intptr_t>(nodes[i].next) - disp;
+	std::memcpy(&nodes[i].next, &v, sizeof(v));
+      }
+    }
+    intptr_t start_biased = reinterpret_cast<intptr_t>(h) - disp;
     
     size_t iters = n_keys*16;
     if(iters < (1UL<<20)) {
@@ -247,7 +266,10 @@ int main(int argc, char *argv[]) {
       auto start = std::chrono::high_resolution_clock::now();
       cc.enable_counter();
       auto c_start = cc.read_counter();
-      if(addressing == 1) {
+      if(disp) {
+	traverse_disp_dyn(disp, start_biased, iters);
+      }
+      else if(addressing == 1) {
 	traverse_offset(nodes, start_off, iters);
       }
       else if(addressing == 2) {

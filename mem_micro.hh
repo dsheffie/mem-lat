@@ -90,6 +90,10 @@ node *atomic_traverse(node *n, uint64_t iters, uint64_t amt);
 /* -A 1: ring of byte offsets, ldr [base, off]; -A 2: element indices, ldr [base, idx, lsl #3] */
 uint64_t traverse_offset(const node *nodes, uint64_t off, uint64_t iters);
 uint64_t traverse_index(const node *nodes, uint64_t idx, uint64_t iters);
+/* -D d: ring of biased pointers (next - d), chase with ldr [x, #d];
+ * d must be one of 8 64 256 4096 32760 1 -8 -256 (compile-time immediates) */
+#include <cstdint>
+intptr_t traverse_disp_dyn(int d, intptr_t b, uint64_t iters);
 
 int run_loaded(uint64_t chain_nodes,
 	       bool bind,
