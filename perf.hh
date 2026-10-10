@@ -67,23 +67,31 @@ public:
     //pe.exclude_hv = 1;
     int cpu = sched_getcpu();
     fd = syscall(__NR_perf_event_open, &pe, 0, cpu, -1, 0);
-    if(fd < 0) perror("WTF");
-    assert(fd > -1);
+    if(fd < 0) {
+      /* e.g. a VM guest without a virtualised PMU: cycles read as 0 and
+       * only the ns column is meaningful */
+      static bool warned = false;
+      if(!warned) {
+        perror("perf_event_open (cycles will read 0)");
+        warned = true;
+      }
+    }
   }
   ~cycle_counter() {
-    close(fd);
+    if(fd >= 0) close(fd);
   }
   void reset_counter() {
-    ioctl(fd, PERF_EVENT_IOC_RESET, 0);
+    if(fd >= 0) ioctl(fd, PERF_EVENT_IOC_RESET, 0);
   }
   void enable_counter() {
-    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+    if(fd >= 0) ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
   }
   void disable_counter() {
-    ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
+    if(fd >= 0) ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
   }
   uint64_t read_counter() {
     uint64_t count = 0;
+    if(fd < 0) return 0;
     ssize_t rc = read(fd, &count, sizeof(count));
     assert(rc != -1);
     return count;

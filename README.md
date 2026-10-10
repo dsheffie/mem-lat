@@ -264,3 +264,32 @@ with a 4-cycle load-to-ALU latency, a 1-cycle `orr`, and some bypass cost
 from the ALU result into address generation, against the 3-cycle
 load-to-address path.
 
+### The same question in a Linux guest
+
+A Linux VM on the same machine runs on the same cores and lets a process map
+the low 4 GiB, so a 32-bit value can be a complete pointer and the 4-byte
+chase can sit on the load-to-load fast path with nothing between the loads.
+`chase32-linux.sh` does this with Apple's `container` tool (each container
+is a lightweight arm64 VM); `-L` maps the array at 256 MiB and `-A 5` / `-D`
+then chase true 32-bit pointers. The guest has no PMU, so the script derives
+the clock from the aligned 64-bit chase and passes it as `-G`.
+
+M6 Super core (derived clock 4.74 GHz), L1 resident, cycles per hop:
+
+| address | `ldr x,[x]` | `ldr w,[x]` | `ldr w,[x,#4]` | `ldr w,[x,#1]` | `ldr x,[x]; orr` | `ldr w,[x0,x1]` |
+|---|---|---|---|---|---|---|
+| aligned | 3.0 | 3.0 | 3.0 | 3.0 | 5.5 | 4.0 |
+| 4 mod 8 (4-byte aligned) | 7.0 | 7.0 | 7.0 | 7.0 | 5.5 | 4.0 |
+| 1, 2 mod 8 (inside a word) | 7.0 | 7.0 | 7.0 | 6.9 | 5.5 | 4.0 |
+| 5, 6 mod 8 (crossing a word) | 7.0 | 7.0 | 7.0 | 7.0 | 5.5 | 4.0 |
+| 12 mod 16 | 7.0 | 7.0 | 7.0 | 6.9 | 5.6 | 4.0 |
+| 60 mod 64 (4-byte load stays in the line) | 7.4 | 7.0 | 6.9 | 7.0 | 5.9 | 4.0 |
+| 62 mod 64 (4-byte load crosses the line) | 7.4 | 7.4 | 7.4 | 7.4 | 5.9 | 4.5 |
+
+So a 4-byte load that is naturally aligned but sits at 4 mod 8 pays the same
+4-cycle replay as a misaligned 8-byte load: the 3-cycle fast path requires
+the address to be 8-byte aligned whatever the access size, i.e. it reads an
+aligned 8-byte granule. Crossing a 64-byte line adds about 0.4 cycles on top
+for every form, including the general path, which is otherwise
+alignment-blind.
+

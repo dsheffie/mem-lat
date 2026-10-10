@@ -26,13 +26,22 @@
  *   -A 2  ldr x8, [x8]; orr        64-bit pointer chase with the same orr (calibration)
  *   -A 3  ldr x8, [x8]             64-bit pointer chase, no fix-up (control)
  *   -A 4  ldr x8, [x0, x8]         64-bit offsets (control)
+ *   -A 5  ldr w8, [x8]             true 32-bit pointer chase, needs -L
  *   -D d  ldr w8, [x8, #d]; orr    biased 32-bit pointers, d in {4 8 64 1 -4}
+ *                                  (with -L: no orr, true 32-bit pointers)
+ *
+ * On Linux (e.g. an arm64 VM on the same machine) -L maps the array at a
+ * fixed address below 4 GiB, so -A 5 and -D chase real 32-bit pointers with
+ * nothing between the loads: that is the only way to put a 4-byte load on
+ * the load-to-load fast path. A VM guest has no PMU, so pass -G <GHz> to
+ * convert ns to cycles (calibrate with the aligned -A 3 chase = 3 cycles).
  */
 #include <sys/mman.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <cstdint>
 #include <vector>
 #include <chrono>
@@ -46,6 +55,7 @@ static volatile uint64_t g_sink;
 
 #define S4(x)  x x x x
 #define S32(x) S4(x) S4(x) S4(x) S4(x) S4(x) S4(x) S4(x) S4(x)
+#define DISP_LIST X(4) X(8) X(64) X(1) X(-4)
 
 __attribute__((noinline)) uint64_t chase_ptr32(uint64_t p, uint64_t hi, uint64_t iters) {
   while(iters) {
@@ -81,6 +91,32 @@ __attribute__((noinline)) uint64_t chase_idx64(const char *base, uint64_t off, u
   return off;
 }
 
+__attribute__((noinline)) uint64_t chase_ptr32_pure(uint64_t p, uint64_t iters) {
+  /* true 32-bit pointers: the array is below 4 GiB, no fix-up */
+  while(iters) {
+    S32(p = *reinterpret_cast<const uint32_t*>(p);)
+    iters -= 32;
+  }
+  return p;
+}
+
+template <int D>
+__attribute__((noinline)) uint64_t chase_disp32_pure(uint64_t b, uint64_t iters) {
+  while(iters) {
+    S32(b = *reinterpret_cast<const uint32_t*>(b + D);)
+    iters -= 32;
+  }
+  return b;
+}
+static uint64_t chase_disp32_pure_dyn(int d, uint64_t b, uint64_t iters) {
+  switch(d) {
+#define X(dd) case dd: return chase_disp32_pure<dd>(b, iters);
+    DISP_LIST
+#undef X
+  default: return 0;
+  }
+}
+
 __attribute__((noinline)) uint64_t chase_idx(const char *base, uint64_t off, uint64_t iters) {
   while(iters) {
     S32(off = *reinterpret_cast<const uint32_t*>(base + off);)
@@ -98,7 +134,6 @@ __attribute__((noinline)) uint64_t chase_disp(uint64_t b, uint64_t hi, uint64_t 
   }
   return b;
 }
-#define DISP_LIST X(4) X(8) X(64) X(1) X(-4)
 static uint64_t chase_disp_dyn(int d, uint64_t b, uint64_t hi, uint64_t iters) {
   switch(d) {
 #define X(dd) case dd: return chase_disp<dd>(b, hi, iters);
@@ -111,10 +146,14 @@ static uint64_t chase_disp_dyn(int d, uint64_t b, uint64_t hi, uint64_t iters) {
 int main(int argc, char *argv[]) {
   int c, mode = 0, disp = 0, lo = 9, hi = 14;
   size_t stride = 8, misalign = 0;
+  bool low = false;
+  double ghz = 0.0;
   std::vector<int> cpus;
-  while((c = getopt(argc, argv, "c:S:M:A:D:n:m:")) != -1) {
+  while((c = getopt(argc, argv, "c:S:M:A:D:n:m:LG:")) != -1) {
     switch(c) {
     case 'c': cpus = parse_cpu_spec(optarg); break;
+    case 'L': low = true; break;
+    case 'G': ghz = atof(optarg); break;
     case 'S': stride = std::max(4, atoi(optarg)); break;
     case 'M': misalign = atoi(optarg); break;
     case 'A': mode = atoi(optarg); break;
@@ -132,9 +171,24 @@ int main(int argc, char *argv[]) {
   const size_t bytes = stride * max_keys + misalign + 256;
   /* any address is fine as long as the array does not straddle a 4 GiB
    * boundary; retry with a hint if it does */
+  if(mode == 5 && !low) {
+    std::cout << "-A 5 needs -L (array below 4 GiB)\n";
+    return -1;
+  }
   void *ptr = MAP_FAILED;
   uint64_t hint = 0;
-  for(int attempt = 0; attempt < 8; attempt++) {
+  if(low) {
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE MAP_FIXED
+#endif
+    ptr = mmap(reinterpret_cast<void*>(0x10000000ULL), bytes, PROT_READ | PROT_WRITE,
+               MAP_ANON | MAP_PRIVATE | MAP_FIXED_NOREPLACE, -1, 0);
+    if(ptr == MAP_FAILED || reinterpret_cast<uint64_t>(ptr) + bytes > (1ULL << 32)) {
+      std::cout << "could not map below 4 GiB (" << strerror(errno) << ")\n";
+      return -1;
+    }
+  }
+  for(int attempt = 0; attempt < 8 && ptr == MAP_FAILED; attempt++) {
     ptr = mmap(reinterpret_cast<void*>(hint), bytes, PROT_READ | PROT_WRITE,
                MAP_ANON | MAP_PRIVATE, -1, 0);
     if(ptr == MAP_FAILED) break;
@@ -164,7 +218,9 @@ int main(int argc, char *argv[]) {
   const char *mname = disp ? "ldr w, [x, #imm]; orr" : mode == 1 ? "ldr w, [x0, x1]"
                       : mode == 2 ? "ldr x, [x]; orr (64-bit calibration)"
                       : mode == 3 ? "ldr x, [x] (64-bit control)"
-                      : mode == 4 ? "ldr x, [x0, x1] (64-bit control)" : "ldr w, [x]; orr";
+                      : mode == 4 ? "ldr x, [x0, x1] (64-bit control)"
+                      : mode == 5 ? "ldr w, [x] (true 32-bit pointers)" : "ldr w, [x]; orr";
+  if(disp && low) mname = "ldr w, [x, #imm] (true 32-bit pointers)";
   std::cout << "mapped at " << ptr << ", stride " << stride << ", misalign " << misalign
             << ", mode " << mname << (disp ? " imm " + std::to_string(disp) : "") << "\n";
 
@@ -208,6 +264,8 @@ int main(int argc, char *argv[]) {
       else if(mode == 2) r = chase_ptr64(start, hibits, iters);
       else if(mode == 3) r = chase_plain64(start, iters);
       else if(mode == 4) r = chase_idx64(base, start - reinterpret_cast<uint64_t>(base), iters);
+      else if(mode == 5) r = chase_ptr32_pure(start, iters);
+      else if(disp && low) r = chase_disp32_pure_dyn(disp, start - disp, iters);
       else if(disp)      r = chase_disp_dyn(disp, start - disp, hibits, iters);
       else               r = chase_ptr32(start, hibits, iters);
       g_sink += r; /* keep the chase alive */
@@ -216,6 +274,7 @@ int main(int argc, char *argv[]) {
       cpu1 = current_cpu();
       cyc = static_cast<double>(c1 - c0) / iters;
       ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / iters;
+      if(ghz > 0.0) cyc = ns * ghz; /* no PMU: derive cycles from the given clock */
       if(pinned || cpus.empty() || (cpu_in(cpus, cpu0) && cpu_in(cpus, cpu1))) break;
     }
     std::cout << (n * stride) << "," << cyc << " cycles," << ns << " ns,cpu " << cpu1 << "\n";
