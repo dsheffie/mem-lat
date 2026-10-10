@@ -36,7 +36,9 @@ int main(int argc, char *argv[]) {
   int warmup_secs = 0;   /* -w: spin this long before the sweep (lets DVFS settle) */
   int addressing = 0;    /* -A: 0 pointer chase, 1 base+byte offset, 2 base+scaled index */
   int disp = 0;          /* -D: base + immediate displacement chase */
-  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:A:B:D:L:")) != -1) {
+  size_t stride = sizeof(node); /* -S: bytes between nodes */
+  size_t misalign = 0;   /* -M: shift the whole array by this many bytes */
+  while ((c = getopt (argc, argv, "a:b:c:i:m:n:o:p:s:tw:x:A:B:D:L:M:S:")) != -1) {
     switch(c)
       {
       case 'a':
@@ -88,6 +90,12 @@ int main(int argc, char *argv[]) {
       case 'D':
 	disp = atoi(optarg);
 	break;
+      case 'M':
+	misalign = static_cast<size_t>(atoi(optarg));
+	break;
+      case 'S':
+	stride = static_cast<size_t>(std::max(static_cast<int>(sizeof(node)), atoi(optarg)));
+	break;
       case 'L':
 	loaded = atoi(optarg);
 	break;
@@ -101,8 +109,13 @@ int main(int argc, char *argv[]) {
     return run_loaded(max_keys, bind, loaded, load, step, max_iters);
   }
 
-  std::cout << "node size = " << sizeof(node) << ", running with xor'd pointers = "
+  std::cout << "node size = " << sizeof(node) << ", stride = " << stride
+	    << ", misalignment = " << misalign << ", running with xor'd pointers = "
 	    << xor_pointers << "\n";
+  if(addressing == 2 && (stride % sizeof(uint64_t)) != 0) {
+    std::cout << "-A 2 needs a stride that is a multiple of 8\n";
+    return -1;
+  }
   if(addressing) {
     std::cout << "addressing: " << (addressing == 1 ? "base + byte offset (ldr [xB, xI])"
 					: "base + scaled index (ldr [xB, xI, lsl #3])")
@@ -150,12 +163,23 @@ int main(int argc, char *argv[]) {
 	      << cpu_list_str(cpus) << "\n";
   }
 
-  ptr = alloc_mem(sizeof(node)*max_keys);
+  const size_t map_bytes = stride*max_keys + misalign + 256;
+  ptr = alloc_mem(map_bytes);
   if(ptr == nullptr) {
     std::cout << "unable to mmap memory\n";
     return -1;
   }
-  nodes = reinterpret_cast<node*>(ptr);
+  /* node k lives at base + k*stride; base is shifted by -M so every pointer
+   * the chase loads sits at that misalignment (and, with a stride of 64 and
+   * -M 60, straddles a cache line) */
+  char *base = reinterpret_cast<char*>(ptr) + misalign;
+  nodes = reinterpret_cast<node*>(base);
+  auto node_at = [base, stride](uint64_t k) -> node* {
+    return reinterpret_cast<node*>(base + k*stride);
+  };
+  auto node_index = [base, stride](const node *n) -> uint64_t {
+    return static_cast<uint64_t>(reinterpret_cast<const char*>(n) - base) / stride;
+  };
 
   /* Optional warm-up at the sweep's QoS so the cluster's DVFS state has
    * settled before the first sample; reports the clock it reached. */
@@ -208,11 +232,11 @@ int main(int argc, char *argv[]) {
     }
     
     shuffle(keys, n_keys);
-    node *h = &nodes[keys[0]];
+    node *h = node_at(keys[0]);
     node *c = h;  
     h->next = h;
     for(uint64_t i = 1; i < n_keys; i++) {
-      node *n = &nodes[keys[i]];
+      node *n = node_at(keys[i]);
       node *t = c->next;
       c->next = n;
       n->next = t;
@@ -221,25 +245,28 @@ int main(int argc, char *argv[]) {
     
     if(xor_pointers) {
       for(uint64_t i = 0; i < n_keys; i++) {
-	nodes[i].next = xor_ptr<true>(nodes[i].next);
+	node_at(i)->next = xor_ptr<true>(node_at(i)->next);
       }
     }
     if(addressing) {
-      /* rewrite the ring in place: pointer -> offset from nodes[0] */
+      /* rewrite the ring in place: pointer -> byte offset (or 8-byte index)
+       * from the (possibly misaligned) base */
       for(uint64_t i = 0; i < n_keys; i++) {
-	uint64_t d = static_cast<uint64_t>(nodes[i].next - nodes);
-	if(addressing == 1) {
-	  d *= sizeof(node);
+	node *ni = node_at(i);
+	uint64_t d = node_index(ni->next) * stride;
+	if(addressing == 2) {
+	  d /= sizeof(uint64_t);
 	}
-	std::memcpy(&nodes[i].next, &d, sizeof(d));
+	std::memcpy(&ni->next, &d, sizeof(d));
       }
     }
-    uint64_t start_off = static_cast<uint64_t>(h - nodes) * (addressing == 1 ? sizeof(node) : 1);
+    uint64_t start_off = node_index(h) * stride / (addressing == 2 ? sizeof(uint64_t) : 1);
     if(disp) {
       /* bias every stored pointer by -disp; the chase adds it back */
       for(uint64_t i = 0; i < n_keys; i++) {
-	intptr_t v = reinterpret_cast<intptr_t>(nodes[i].next) - disp;
-	std::memcpy(&nodes[i].next, &v, sizeof(v));
+	node *ni = node_at(i);
+	intptr_t v = reinterpret_cast<intptr_t>(ni->next) - disp;
+	std::memcpy(&ni->next, &v, sizeof(v));
       }
     }
     intptr_t start_biased = reinterpret_cast<intptr_t>(h) - disp;
@@ -299,9 +326,9 @@ int main(int argc, char *argv[]) {
       std::cout << "warn : sample ran on cpu " << cpu0 << "/" << cpu1
 		<< " despite -c\n";
     }
-    std::cout << (n_keys*sizeof(node)) << "," << c_t <<" cycles," <<t << " ns"
+    std::cout << (n_keys*stride) << "," << c_t <<" cycles," <<t << " ns"
 	      << ",cpu " << cpu1 << "\n";
-    out << (n_keys*sizeof(node)) << "," << c_t <<"," << t << "," << cpu1 << "\n";
+    out << (n_keys*stride) << "," << c_t <<"," << t << "," << cpu1 << "\n";
     out.flush();
   }
   out.close();
@@ -309,6 +336,6 @@ int main(int argc, char *argv[]) {
   for(auto &t : blockers) {
     t.join();
   }
-  munmap(ptr, sizeof(node)*max_keys);  
+  munmap(ptr, map_bytes);  
   return 0;
 }
