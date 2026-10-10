@@ -17,6 +17,10 @@ DEP = $(OBJ:.o=.d)
 
 all: $(EXE)
 
+# 4-byte pointer chase experiment (see chase32.cc)
+chase32: chase32.o $(filter-out mem_micro.o loaded.o traverse.o,$(OBJ))
+	$(CXX) $(CXXFLAGS) $^ $(LIBS) -o $@
+
 $(EXE) : $(OBJ)
 	$(CXX) $(CXXFLAGS) $(OBJ) $(LIBS) -o $(EXE)
 
@@ -26,4 +30,4 @@ $(EXE) : $(OBJ)
 -include $(DEP)
 
 clean:
-	rm -f $(EXE) $(OBJ) $(DEP) *.csv *~
+	rm -f $(EXE) $(OBJ) $(DEP) chase32 chase32.o chase32.d *.csv *~

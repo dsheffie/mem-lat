@@ -220,3 +220,47 @@ is still valid.
   Super cores, 128 KiB L1D, shared 20 MiB L2) and 8-11 are `M`
   (Performance).
 
+## chase32: 4-byte loads and where the misalignment penalty lives
+
+`make chase32` builds a side experiment that chases 32-bit pointers. A 32-bit
+load cannot yield a full address unless the array sits below 4 GiB, and Apple
+silicon refuses to run native arm64 binaries with a small `__PAGEZERO` (the
+kernel kills them with "Security policy would not allow process"), so the
+chase ORs the array's constant high half back in after each load:
+
+```
+ldr w8, [x8]          ; or [x8, #imm]
+orr x8, x9, x8        ; x9 = base & ~0xffffffff
+```
+
+That puts an ALU op in the dependency chain, so `-A 2` (a 64-bit chase with
+the same `orr`) and `-A 3` (the plain 64-bit chase) are included as controls,
+plus `-A 1` / `-A 4` for 32- and 64-bit register-indexed loads. `-S` and `-M`
+work as in `mem_micro`. Flags: `-c`, `-n`, `-m`, `-S`, `-M`, `-A 0..4`,
+`-D {4 8 64 1 -4}`.
+
+M6 Super core, L1 resident, cycles per hop:
+
+| address | `ldr x,[x]` | `ldr x,[x]; orr` | `ldr w,[x]; orr` | `ldr w,[x,#4]; orr` | `ldr x,[x0,x1]` | `ldr w,[x0,x1]` |
+|---|---|---|---|---|---|---|
+| aligned | 3.0 | 5.5 | 5.5 | 5.5 | 4.0 | 4.0 |
+| 4 mod 8 | 7.0 | 5.5 | 5.5 | 5.5 | 4.0 | 4.0 |
+| 1, 2 mod 8 (inside a word) | 7.0 | 5.5 | 5.5 | 5.5 | 4.0 | 4.0 |
+| 5, 6 mod 8 (crossing a word) | 7.0 | 5.5 | 5.5 | 5.5 | 4.0 | 4.0 |
+| crossing a 64 B line | 7.1 | 5.3 | 5.5 | 5.2 | 4.1 | 4.1 |
+
+Two things follow. First, the 4 extra cycles for a misaligned load exist only
+on the load-to-load address fast path: put any ALU op between the loads and a
+misaligned 8-byte load costs exactly what an aligned one does. So the 7 is a
+replay of a speculatively woken dependent load, not the latency of the
+misaligned access itself. Second, 4-byte loads behave exactly like 8-byte
+loads in every column, so nothing in the general path distinguishes them. The
+original question, whether the 3-cycle fast path accepts a 4-byte load at 4
+mod 8, cannot be asked on this platform: the fast path needs the loaded
+value to be the complete address, and 32-bit addresses are unmappable.
+
+The `orr` costs 2.5 cycles over the plain chase (3.0 to 5.5), consistent
+with a 4-cycle load-to-ALU latency, a 1-cycle `orr`, and some bypass cost
+from the ALU result into address generation, against the 3-cycle
+load-to-address path.
+
